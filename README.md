@@ -138,6 +138,14 @@ Web Developer | Aspiring Software Engineer
 
 ---
 
+🚀 Connect With Me
+
+📧 Email: akumar57226@gmail.com
+🔗 LinkedIn: https://www.linkedin.com/in/harshit-kumar-rai-7b292b321
+🐙 GitHub: https://github.com/Harshit-Kr-Rai
+
+---
+
 ## ⭐ Support
 
 If you like this project, please give it a ⭐ on GitHub — it really helps!
