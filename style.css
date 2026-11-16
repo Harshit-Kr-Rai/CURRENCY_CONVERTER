@@ -136,7 +136,7 @@ input, select {
 
 button#convert-button {
 background: linear-gradient(120deg, #bdc3c7, #2c3e50);
-  border: 60px;
+  border: none;
   padding: 12px;
   border-radius: 10px;
   color: rgb(253, 251, 251);
@@ -319,16 +319,24 @@ body {
 
 /* ☀️ DAY MODE */
 body.day-mode {
-  background: rgba(192, 17, 17, 0.5); /* white transparent layer */
-  backdrop-filter: blur(25px); /* soft blur background */
+  background: linear-gradient(135deg, #fdfbfb, #ebedee);
   color: #000; /* text becomes black */
+}
+
+/* The fixed bubble layer covers the page background, so it needs a light version too */
+body.day-mode .bubble-background {
+  background: radial-gradient(circle at center, #fff7fa, #f1d9e8);
+}
+
+body.day-mode .app-title {
+  color: #000;
 }
 
 /* Adjust major containers for day mode */
 body.day-mode .wrapper,
 body.day-mode .graph-container,
 body.day-mode .quotes-container {
-  background: rgba(202, 201, 201, 0.417);
+  background: rgba(255, 255, 255, 0.65);
   color: #000;
   box-shadow: 0 4px 20px rgba(0,0,0,0.1);
 }

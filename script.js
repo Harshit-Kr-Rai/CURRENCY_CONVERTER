@@ -1,28 +1,10 @@
 // ======================
-// Netflix Intro Handling
+// Settings
 // ======================
-window.addEventListener("load", () => {
-  const intro = document.querySelector(".netflix-intro");
-  setTimeout(() => {
-    intro.style.transition = "opacity 1s ease";
-    intro.style.opacity = "0";
-    setTimeout(() => {
-      intro.style.display = "none";
-      document.querySelectorAll(".wrapper, .graph-container")
-        .forEach(el => el.style.display = "block");
-    }, 1000);
-  }, 3500);
-});
-
-
-
-
-
-
-
+const API = "https://api.frankfurter.app"; // free, no API key needed
 
 // ======================
-// Global Variables
+// Page elements
 // ======================
 const fromCurrency = document.getElementById("from-currency-select");
 const toCurrency = document.getElementById("to-currency-select");
@@ -31,73 +13,142 @@ const swapButton = document.getElementById("swap-button");
 const result = document.getElementById("result");
 const amountInput = document.getElementById("amount");
 const daysSelect = document.getElementById("days");
-const ctx = document.getElementById("currencyChart").getContext("2d");
+const chartCanvas = document.getElementById("currencyChart");
+const ctx = chartCanvas.getContext("2d");
 
-let currencyChart;
+let currencyChart = null;
+let lastChart = null;   // remembers the last chart so the theme toggle can redraw it
+let requestId = 0;      // ignores out-of-date responses
 
 // ======================
-// Fetch & Populate Currencies
+// Netflix intro
+// ======================
+window.addEventListener("load", () => {
+  const intro = document.querySelector(".netflix-intro");
+  const showApp = () => {
+    document.querySelectorAll(".wrapper, .graph-container")
+      .forEach(el => (el.style.display = "block"));
+    if (currencyChart) currencyChart.resize(); // chart was drawn while hidden
+  };
+  if (!intro) { showApp(); return; }
+  setTimeout(() => {
+    intro.style.transition = "opacity 1s ease";
+    intro.style.opacity = "0";
+    setTimeout(() => {
+      intro.style.display = "none";
+      showApp();
+    }, 1000);
+  }, 3500);
+});
+
+// ======================
+// Helpers
+// ======================
+async function getJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Request failed with status " + res.status);
+  return res.json();
+}
+
+function getFlagEmoji(code) {
+  // First two letters of a currency code are the country code (USD -> US, INR -> IN)
+  return code
+    .slice(0, 2)
+    .toUpperCase()
+    .split("")
+    .map(ch => String.fromCodePoint(127397 + ch.charCodeAt(0)))
+    .join("");
+}
+
+function formatNumber(value) {
+  const maxDigits = Math.abs(value) < 1 ? 4 : 2; // keep small rates like 0.0066 readable
+  try {
+    return new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: maxDigits
+    }).format(value);
+  } catch (e) {
+    return value.toFixed(maxDigits);
+  }
+}
+
+// ======================
+// Fetch & populate currencies (with flags)
 // ======================
 async function loadCurrencies() {
-  const res = await fetch("https://api.frankfurter.app/currencies");
-  const data = await res.json();
-  const currencies = Object.keys(data);
+  try {
+    const data = await getJSON(`${API}/currencies`);
+    const codes = Object.keys(data);
 
-  fromCurrency.innerHTML = "";
-  toCurrency.innerHTML = "";
+    fromCurrency.innerHTML = "";
+    toCurrency.innerHTML = "";
 
-  currencies.forEach(code => {
-    const option1 = document.createElement("option");
-    const option2 = document.createElement("option");
-    option1.value = option2.value = code;
-    option1.textContent = option2.textContent = code;
-    fromCurrency.appendChild(option1);
-    toCurrency.appendChild(option2);
-  });
+    codes.forEach(code => {
+      const label = `${getFlagEmoji(code)} ${code}`;
+      const optFrom = document.createElement("option");
+      const optTo = document.createElement("option");
+      optFrom.value = optTo.value = code;
+      optFrom.textContent = optTo.textContent = label;
+      fromCurrency.appendChild(optFrom);
+      toCurrency.appendChild(optTo);
+    });
 
-  // Default selections
-  fromCurrency.value = "USD";
-  toCurrency.value = "INR";
-
-  // Do initial conversion
-  convertCurrency();
+    fromCurrency.value = "USD";
+    toCurrency.value = "INR";
+    convertCurrency();
+  } catch (err) {
+    console.error("Could not load currencies:", err);
+    result.textContent = "Could not load currencies. Check your internet connection and refresh the page.";
+  }
 }
-loadCurrencies();
 
 // ======================
-// Convert Currency
+// Convert currency
 // ======================
 async function convertCurrency() {
-  const amount = amountInput.value;
+  const amount = parseFloat(amountInput.value);
   const from = fromCurrency.value;
   const to = toCurrency.value;
+  const thisRequest = ++requestId;
 
-  if (amount === "" || amount <= 0) {
+  if (!(amount > 0)) {
     result.textContent = "Enter a valid amount.";
     return;
   }
+  if (!from || !to) return;
 
-  // Use Frankfurter API for conversion
-  const res = await fetch(
-    `https://api.frankfurter.app/latest?amount=${amount}&from=${from}&to=${to}`
-  );
-  const data = await res.json();
-
-  if (!data.rates || !data.rates[to]) {
-    result.textContent = "Conversion rate not available.";
+  if (from === to) {
+    result.textContent = `${formatNumber(amount)} ${from} = ${formatNumber(amount)} ${to}`;
+    if (currencyChart) { currencyChart.destroy(); currencyChart = null; }
     return;
   }
 
-  const converted = data.rates[to].toFixed(2);
-  result.textContent = `${amount} ${from} = ${converted} ${to}`;
+  try {
+    const data = await getJSON(`${API}/latest?amount=${amount}&from=${from}&to=${to}`);
+    if (thisRequest !== requestId) return; // a newer request replaced this one
 
-  // Load chart for selected currencies
-  loadChart(from, to, daysSelect.value);
+    if (!data.rates || typeof data.rates[to] !== "number") {
+      result.textContent = "Conversion rate not available.";
+      return;
+    }
+    result.textContent = `${formatNumber(amount)} ${from} = ${formatNumber(data.rates[to])} ${to}`;
+    loadChart(from, to, daysSelect.value);
+  } catch (err) {
+    console.error("Conversion failed:", err);
+    if (thisRequest === requestId) {
+      result.textContent = "Could not fetch the exchange rate. Check your connection and try again.";
+    }
+  }
 }
+
 convertButton.addEventListener("click", convertCurrency);
+fromCurrency.addEventListener("change", convertCurrency);
+toCurrency.addEventListener("change", convertCurrency);
+daysSelect.addEventListener("change", convertCurrency);
+amountInput.addEventListener("keydown", e => { if (e.key === "Enter") convertCurrency(); });
 
 // ======================
-// Swap Button
+// Swap button
 // ======================
 swapButton.addEventListener("click", () => {
   const temp = fromCurrency.value;
@@ -107,250 +158,175 @@ swapButton.addEventListener("click", () => {
 });
 
 // ======================
-// Historical Data & Chart
+// Historical data & chart
 // ======================
+function chartTextColor() {
+  return document.body.classList.contains("day-mode") ? "#222" : "white";
+}
+
 async function loadChart(from, to, days) {
-  const endDate = new Date().toISOString().split("T")[0];
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days);
-  const start = startDate.toISOString().split("T")[0];
-
-  const res = await fetch(
-    `https://api.frankfurter.app/${start}..${endDate}?from=${from}&to=${to}`
-  );
-  const data = await res.json();
-
-  const labels = Object.keys(data.rates).sort();
-  const values = labels.map(date => data.rates[date][to]);
-
-  if (currencyChart) {
-    currencyChart.destroy();
+  lastChart = { from, to, days };
+  if (typeof Chart === "undefined") {
+    console.error("Chart.js is not loaded. Add its <script> tag before script.js in index.html.");
+    return;
   }
 
-  currencyChart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: labels,
-      datasets: [{
-        label: `${from} → ${to}`,
-        data: values,
-        borderColor: "#4bc0c0",
-        backgroundColor: "rgba(75,192,192,0.2)",
-        fill: true,
-        tension: 0.3
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { labels: { color: "white" } }
+  try {
+    const numDays = parseInt(days, 10) || 7;
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - numDays);
+    const fmt = d => d.toISOString().split("T")[0];
+
+    const data = await getJSON(`${API}/${fmt(start)}..${fmt(end)}?from=${from}&to=${to}`);
+    if (!data.rates) return;
+
+    const labels = Object.keys(data.rates).sort();
+    const values = labels.map(date => data.rates[date][to]);
+    const textColor = chartTextColor();
+    const gridColor = textColor === "white" ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)";
+
+    if (currencyChart) currencyChart.destroy();
+
+    currencyChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: `${from} → ${to}`,
+          data: values,
+          borderColor: "#4bc0c0",
+          backgroundColor: "rgba(75,192,192,0.2)",
+          fill: true,
+          tension: 0.3
+        }]
       },
-      scales: {
-        x: {
-          ticks: { color: "white" },
-          grid: { color: "rgba(255,255,255,0.1)" }
-        },
-        y: {
-          ticks: { color: "white" },
-          grid: { color: "rgba(255,255,255,0.1)" }
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: textColor } } },
+        scales: {
+          x: { ticks: { color: textColor }, grid: { color: gridColor } },
+          y: { ticks: { color: textColor }, grid: { color: gridColor } }
         }
       }
-    }
-  });
+    });
+  } catch (err) {
+    console.error("Could not load chart data:", err);
+  }
 }
 
 // ======================
-// Change Graph on Days Select
+// Live market quotes (no API key needed)
 // ======================
-daysSelect.addEventListener("change", convertCurrency);
+async function fetchForexQuotes() {
+  const quotesList = document.getElementById("quotes-list");
+  if (!quotesList) return;
 
-
-
-
-
-
-
-
-
-
-
-
+  const pairs = [["EUR", "USD"], ["USD", "INR"], ["GBP", "USD"], ["USD", "JPY"], ["AUD", "USD"]];
+  try {
+    const rows = await Promise.all(
+      pairs.map(([a, b]) => getJSON(`${API}/latest?from=${a}&to=${b}`))
+    );
+    quotesList.innerHTML = "";
+    rows.forEach((data, i) => {
+      const [a, b] = pairs[i];
+      const rate = data.rates && data.rates[b];
+      if (typeof rate !== "number") return;
+      const li = document.createElement("li");
+      li.innerHTML = `<strong>${a}/${b}</strong>: ${rate.toFixed(4)}`;
+      quotesList.appendChild(li);
+    });
+  } catch (err) {
+    console.error("Error fetching forex quotes:", err);
+    quotesList.innerHTML = "<li>Quotes are unavailable right now.</li>";
+  }
+}
 
 // ======================
-// Floating Background Bubbles
+// Floating background: bubbles and currency symbols
 // ======================
 const bubbleBackground = document.querySelector(".bubble-background");
 
-function createBubble() {
-  const bubble = document.createElement("div");
-  bubble.classList.add("circle");
-
-  // Random size
-  const size = Math.random() * 40 + 20;
-  bubble.style.width = `${size}px`;
-  bubble.style.height = `${size}px`;
-
-  // Random horizontal position
-  bubble.style.left = Math.random() * window.innerWidth + "px";
-
-  // Neon-like gradient colors
-  const colors = [
+if (bubbleBackground) {
+  const bubbleColors = [
     "rgba(255, 77, 109, 0.6)",
     "rgba(0, 255, 255, 0.6)",
     "rgba(255, 255, 0, 0.6)",
     "rgba(153, 102, 255, 0.6)",
     "rgba(0, 255, 128, 0.6)"
   ];
-  bubble.style.background = colors[Math.floor(Math.random() * colors.length)];
 
-  bubbleBackground.appendChild(bubble);
+  setInterval(() => {
+    const bubble = document.createElement("div");
+    bubble.classList.add("circle");
+    const size = Math.random() * 40 + 20;
+    bubble.style.width = `${size}px`;
+    bubble.style.height = `${size}px`;
+    bubble.style.left = Math.random() * window.innerWidth + "px";
+    bubble.style.background = bubbleColors[Math.floor(Math.random() * bubbleColors.length)];
+    bubbleBackground.appendChild(bubble);
+    setTimeout(() => bubble.remove(), 8000);
+  }, 500);
 
-  // Remove after animation
-  setTimeout(() => bubble.remove(), 8000);
+  const symbols = [
+    { char: "$", color: "#00ff00" },
+    { char: "€", color: "#00aaff" },
+    { char: "₹", color: "#ff9933" },
+    { char: "£", color: "#b266ff" },
+    { char: "¥", color: "#ff3333" },
+    { char: "₿", color: "#ffaa00" },
+    { char: "₩", color: "#66ffcc" },
+    { char: "₽", color: "#ffffff" }
+  ];
+
+  setInterval(() => {
+    const symbol = document.createElement("div");
+    symbol.classList.add("currency-symbol");
+    const pick = symbols[Math.floor(Math.random() * symbols.length)];
+    symbol.textContent = pick.char;
+    symbol.style.color = pick.color;
+    symbol.style.textShadow = `0 0 10px ${pick.color}, 0 0 20px ${pick.color}`;
+    symbol.style.left = Math.random() * 100 + "vw";
+    symbol.style.fontSize = 20 + Math.random() * 30 + "px";
+    const duration = 6 + Math.random() * 5;
+    symbol.style.animationDuration = duration + "s";
+    bubbleBackground.appendChild(symbol);
+    setTimeout(() => symbol.remove(), duration * 1000);
+  }, 400);
 }
 
-// Keep spawning bubbles
-setInterval(createBubble, 500);
-
-const symbols = [
-  { char: "$", color: "#00ff00" },   // Green
-  { char: "€", color: "#00aaff" },   // Blue
-  { char: "₹", color: "#ff9933" },   // Saffron
-  { char: "£", color: "#b266ff" },   // Purple
-  { char: "¥", color: "#ff3333" },   // Red
-  { char: "₿", color: "#ffaa00" },   // Orange
-  { char: "₩", color: "#66ffcc" },   // Mint
-  { char: "₽", color: "#ffffff" }    // White
-];
-
-const bg = document.querySelector(".bubble-background");
-
-function createSymbol() {
-  const symbol = document.createElement("div");
-  symbol.classList.add("currency-symbol");
-
-  // Pick random symbol
-  const randomSymbol = symbols[Math.floor(Math.random() * symbols.length)];
-  symbol.textContent = randomSymbol.char;
-  symbol.style.color = randomSymbol.color;
-  symbol.style.textShadow = `0 0 10px ${randomSymbol.color}, 0 0 20px ${randomSymbol.color}`;
-
-  // Random position and size
-  symbol.style.left = Math.random() * 100 + "vw";
-  symbol.style.fontSize = 20 + Math.random() * 30 + "px";
-
-  // Random animation duration
-  const duration = 6 + Math.random() * 5;
-  symbol.style.animationDuration = duration + "s";
-
-  bg.appendChild(symbol);
-
-  // Remove after animation
-  setTimeout(() => {
-    symbol.remove();
-  }, duration * 1000);
-}
-
-// Keep spawning symbols
-setInterval(createSymbol, 400);
-
-
-
-
-
-// themeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+// ======================
+// Day / night theme
+// ======================
 const toggleBtn = document.getElementById("theme-toggle");
 
-// Check saved theme
-if (localStorage.getItem("theme") === "night") {
-  document.body.classList.add("night-mode");
-  toggleBtn.textContent = "☀️ Day Mode";
-} else {
-  document.body.classList.add("day-mode");
-  toggleBtn.textContent = "🌙 Night Mode";
-}
-
-// Toggle Theme on Click
-toggleBtn.addEventListener("click", () => {
-  if (document.body.classList.contains("day-mode")) {
-    document.body.classList.remove("day-mode");
+if (toggleBtn) {
+  if (localStorage.getItem("theme") === "night") {
     document.body.classList.add("night-mode");
     toggleBtn.textContent = "☀️ Day Mode";
-    localStorage.setItem("theme", "night");
   } else {
-    document.body.classList.remove("night-mode");
     document.body.classList.add("day-mode");
     toggleBtn.textContent = "🌙 Night Mode";
-    localStorage.setItem("theme", "day");
   }
-});
 
-
-
-
-
-function getFlagEmoji(countryCode) {
-  return countryCode
-    .toUpperCase()
-    .split('')
-    .map(char => String.fromCodePoint(127397 + char.charCodeAt(0)))
-    .join('');
-}
-
-function populateDropdown(selectElement, currencies) {
-  currencies.forEach(currency => {
-    const option = document.createElement("option");
-    const countryCode = currency.slice(0, 2); // first 2 letters = country
-    const flag = getFlagEmoji(countryCode);
-    option.value = currency;
-    option.textContent = `${flag} ${currency}`;
-    selectElement.appendChild(option);
+  toggleBtn.addEventListener("click", () => {
+    if (document.body.classList.contains("day-mode")) {
+      document.body.classList.remove("day-mode");
+      document.body.classList.add("night-mode");
+      toggleBtn.textContent = "☀️ Day Mode";
+      localStorage.setItem("theme", "night");
+    } else {
+      document.body.classList.remove("night-mode");
+      document.body.classList.add("day-mode");
+      toggleBtn.textContent = "🌙 Night Mode";
+      localStorage.setItem("theme", "day");
+    }
+    if (lastChart) loadChart(lastChart.from, lastChart.to, lastChart.days); // recolor the chart text
   });
 }
 
-const fromDropDown = document.getElementById("from-currency-select");
-const toDropDown = document.getElementById("to-currency-select");
-populateDropdown(fromDropDown, currencies);
-populateDropdown(toDropDown, currencies);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-async function fetchForexQuotes() {
-  try {
-    const response = await fetch(
-      `https://financialmodelingprep.com/api/v3/fx?apikey=${fmpApiKey}`
-    );
-    const data = await response.json();
-
-    const quotesList = document.getElementById("quotes-list");
-    quotesList.innerHTML = "";
-
-    // Show only a few major pairs
-    const majorPairs = ["EUR/USD", "USD/INR", "GBP/USD", "USD/JPY", "AUD/USD"];
-
-    majorPairs.forEach(pair => {
-      const quote = data.find(item => item.ticker === pair);
-      if (quote) {
-        const li = document.createElement("li");
-        li.innerHTML = `<strong>${quote.ticker}</strong>: ${quote.bid} / ${quote.ask}`;
-        quotesList.appendChild(li);
-      }
-    });
-  } catch (error) {
-    console.error("Error fetching forex quotes:", error);
-  }
-}
-
-// Call when page loads
+// ======================
+// Start
+// ======================
+loadCurrencies();
 fetchForexQuotes();
