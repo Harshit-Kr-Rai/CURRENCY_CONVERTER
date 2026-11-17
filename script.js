@@ -1,7 +1,7 @@
 // ======================
 // Settings
 // ======================
-const API = "https://api.frankfurter.app"; // free, no API key needed
+const API = "https://api.frankfurter.dev/v1"; // free, no API key needed
 
 // ======================
 // Page elements
